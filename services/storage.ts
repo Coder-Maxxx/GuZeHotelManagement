@@ -1,13 +1,55 @@
 
 import { supabase } from './supabaseClient';
-import { InventoryItem, Transaction, Category, Location } from '../types';
+import { InventoryItem, Transaction, Category, Location, User } from '../types';
 import { INITIAL_ITEMS, INITIAL_TRANSACTIONS, INITIAL_CATEGORIES, INITIAL_LOCATIONS } from '../constants';
 
 // ============================================================================
 // 数据库适配器 (Service Layer) - Supabase 版
 // ============================================================================
 
+const SESSION_KEY = 'inventory_app_session_v1';
+const SESSION_DURATION = 30 * 60 * 1000; // 30 分钟
+
 export const db = {
+  // --- 会话管理 (Session Persistence) ---
+  saveSession: (user: User) => {
+    const sessionData = {
+      user: { ...user, password: '' }, // 安全起见，不存储密码
+      expiry: Date.now() + SESSION_DURATION
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(sessionData));
+  },
+
+  getSession: (): User | null => {
+    const json = localStorage.getItem(SESSION_KEY);
+    if (!json) return null;
+
+    try {
+      const { user, expiry } = JSON.parse(json);
+      if (Date.now() > expiry) {
+        // 会话过期
+        localStorage.removeItem(SESSION_KEY);
+        return null;
+      }
+      
+      // 会话有效，自动续期 (滚动更新)
+      const newSessionData = {
+        user,
+        expiry: Date.now() + SESSION_DURATION
+      };
+      localStorage.setItem(SESSION_KEY, JSON.stringify(newSessionData));
+      
+      return user as User;
+    } catch (e) {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+  },
+
+  clearSession: () => {
+    localStorage.removeItem(SESSION_KEY);
+  },
+
   // --- 初始化/获取所有数据 ---
   fetchAllData: async () => {
     try {
@@ -34,6 +76,46 @@ export const db = {
       console.error("Supabase fetch error:", error);
       throw error;
     }
+  },
+
+  // --- 用户系统 (Auth & Users) ---
+  login: async (username: string, password: string): Promise<User | null> => {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', username)
+      .eq('password', password) // 注意：演示项目使用明文比对，生产环境请使用 Hash
+      .single();
+    
+    if (error || !data) return null;
+    return data as User;
+  },
+
+  getUsers: async (): Promise<User[]> => {
+    const { data, error } = await supabase.from('users').select('*').order('username');
+    if (error) throw error;
+    return data as User[];
+  },
+
+  addUser: async (user: Omit<User, 'createdAt'>): Promise<User> => {
+    const { data, error } = await supabase.from('users').insert(user).select().single();
+    if (error) throw error;
+    return data as User;
+  },
+
+  updateUserPassword: async (id: string, newPassword: string): Promise<void> => {
+    const { error } = await supabase.from('users').update({ password: newPassword }).eq('id', id);
+    if (error) throw error;
+  },
+
+  updateUsername: async (id: string, newUsername: string): Promise<void> => {
+    const { error } = await supabase.from('users').update({ username: newUsername }).eq('id', id);
+    if (error) throw error;
+  },
+
+  deleteUser: async (id: string): Promise<void> => {
+    const { error } = await supabase.from('users').delete().eq('id', id);
+    if (error) throw error;
   },
 
   // --- 商品操作 (Items) ---
@@ -108,35 +190,34 @@ export const db = {
   },
 
   // --- 系统重置 / 数据初始化 ---
+  // 修改逻辑：保留基础数据，仅清空库存和交易记录
   resetDatabase: async () => {
     try {
-      // 1. 清空所有表
-      await supabase.from('transactions').delete().neq('id', '0');
-      await supabase.from('items').delete().neq('id', '0');
-      await supabase.from('categories').delete().neq('id', '0');
-      await supabase.from('locations').delete().neq('id', '0');
+      // 1. 清空交易记录表
+      // neq('id', '0') 是为了匹配所有行（只要ID不是0，通常都是UUID或字符串）
+      const { error: txError } = await supabase
+        .from('transactions')
+        .delete()
+        .neq('id', '0'); 
+      
+      if (txError) throw txError;
 
-      // 2. 批量插入初始数据
-      const { error: err1 } = await supabase.from('categories').insert(INITIAL_CATEGORIES);
-      if(err1) throw err1;
+      // 2. 将所有商品的库存归零
+      const { error: itemError } = await supabase
+        .from('items')
+        .update({ 
+          quantity: 0, 
+          lastUpdated: new Date().toISOString() 
+        })
+        .neq('id', '0'); // 选中所有行
 
-      const { error: err2 } = await supabase.from('locations').insert(INITIAL_LOCATIONS);
-      if(err2) throw err2;
+      if (itemError) throw itemError;
 
-      const { error: err3 } = await supabase.from('items').insert(INITIAL_ITEMS);
-      if(err3) throw err3;
+      // 3. 重新拉取最新状态返回给前端
+      return await db.fetchAllData();
 
-      const { error: err4 } = await supabase.from('transactions').insert(INITIAL_TRANSACTIONS);
-      if(err4) throw err4;
-
-      return {
-        items: INITIAL_ITEMS,
-        transactions: INITIAL_TRANSACTIONS,
-        categories: INITIAL_CATEGORIES,
-        locations: INITIAL_LOCATIONS
-      };
     } catch (error) {
-      console.error("Reset DB error:", error);
+      console.error("Reset Stock error:", error);
       throw error;
     }
   }

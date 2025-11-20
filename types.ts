@@ -1,8 +1,7 @@
 
 export enum TransactionType {
   INBOUND = 'INBOUND',
-  OUTBOUND = 'OUTBOUND',
-  ADJUSTMENT = 'ADJUSTMENT'
+  OUTBOUND = 'OUTBOUND'
 }
 
 export interface InventoryItem {
@@ -40,11 +39,14 @@ export interface Location {
   name: string;
 }
 
-export interface AppState {
-  items: InventoryItem[];
-  transactions: Transaction[];
-  categories: Category[];
-  locations: Location[];
+export type UserRole = 'admin' | 'user';
+
+export interface User {
+  id: string;
+  username: string;
+  password?: string; // Optional when fetching list for security display
+  role: UserRole;
+  createdAt?: string;
 }
 
 export type ViewMode = 'DASHBOARD' | 'INVENTORY' | 'INBOUND' | 'OUTBOUND' | 'REPORTS' | 'SETTINGS' | 'HISTORY';

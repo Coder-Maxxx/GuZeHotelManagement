@@ -7,16 +7,20 @@ import {
   ArrowUpRight, 
   Settings, 
   Boxes,
-  History
+  History,
+  LogOut,
+  UserCircle
 } from 'lucide-react';
-import { ViewMode } from '../types';
+import { ViewMode, User } from '../types';
 
 interface SidebarProps {
   currentView: ViewMode;
+  currentUser: User | null;
   onViewChange: (view: ViewMode) => void;
+  onLogout: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
+const Sidebar: React.FC<SidebarProps> = ({ currentView, currentUser, onViewChange, onLogout }) => {
   
   const navItems = [
     { id: 'DASHBOARD' as ViewMode, label: '仪表盘总览', icon: LayoutDashboard, subtext: 'Summary' },
@@ -67,12 +71,31 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
         })}
       </nav>
 
-      {/* Footer */}
-      <div className="p-4 border-t border-slate-800 text-center lg:text-left">
-        <div className="hidden lg:block">
-          <p className="text-xs text-slate-500">Version 2.6.0</p>
-          <p className="text-[10px] text-slate-600 mt-1">© 2025 酒店库存系统</p>
+      {/* User Info & Logout */}
+      {currentUser && (
+        <div className="p-4 border-t border-slate-800">
+          <div className="flex items-center gap-3 lg:justify-start justify-center mb-3">
+            <div className="bg-slate-700 p-2 rounded-full">
+              <UserCircle size={20} className="text-slate-300" />
+            </div>
+            <div className="hidden lg:block overflow-hidden">
+              <p className="text-sm font-bold text-white truncate">{currentUser.username}</p>
+              <p className="text-xs text-slate-400 capitalize">{currentUser.role}</p>
+            </div>
+          </div>
+          <button 
+            onClick={onLogout}
+            className="w-full flex items-center justify-center lg:justify-start gap-2 p-2 text-slate-400 hover:text-white hover:bg-red-500/20 hover:border-red-500/30 border border-transparent rounded-lg transition-all"
+          >
+            <LogOut size={18} />
+            <span className="hidden lg:inline text-sm">退出登录</span>
+          </button>
         </div>
+      )}
+
+      {/* Footer */}
+      <div className="px-4 pb-4 text-center lg:text-left hidden lg:block">
+        <p className="text-[10px] text-slate-600">© 2025 酒店库存系统 v2.7</p>
       </div>
     </div>
   );
