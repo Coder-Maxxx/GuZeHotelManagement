@@ -1,5 +1,4 @@
 
-
 import { supabase } from './supabaseClient';
 import { InventoryItem, Transaction, Category, Location } from '../types';
 import { INITIAL_ITEMS, INITIAL_TRANSACTIONS, INITIAL_CATEGORIES, INITIAL_LOCATIONS } from '../constants';
@@ -80,6 +79,11 @@ export const db = {
     return data as Transaction;
   },
 
+  deleteTransaction: async (id: string): Promise<void> => {
+    const { error } = await supabase.from('transactions').delete().eq('id', id);
+    if (error) throw error;
+  },
+
   // --- 分类与位置 (Settings) ---
   addCategory: async (cat: Category): Promise<Category> => {
     const { data, error } = await supabase.from('categories').insert(cat).select().single();
@@ -104,14 +108,9 @@ export const db = {
   },
 
   // --- 系统重置 / 数据初始化 ---
-  // 这里的逻辑改为：清空数据库，并写入初始的演示数据
   resetDatabase: async () => {
     try {
-      // 1. 清空所有表 (delete without where clause)
-      // 注意：如果没有 WHERE 子句，Supabase 默认可能会阻止全表删除，
-      // 但我们这里使用 neq '0' (id 不等于 0) 作为一种 hack 来匹配所有行
-      
-      // 为了安全起见，我们先删除子表，再删除主表（虽然这里没外键约束）
+      // 1. 清空所有表
       await supabase.from('transactions').delete().neq('id', '0');
       await supabase.from('items').delete().neq('id', '0');
       await supabase.from('categories').delete().neq('id', '0');

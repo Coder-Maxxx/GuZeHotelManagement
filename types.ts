@@ -47,4 +47,4 @@ export interface AppState {
   locations: Location[];
 }
 
-export type ViewMode = 'DASHBOARD' | 'INVENTORY' | 'INBOUND' | 'OUTBOUND' | 'REPORTS' | 'SETTINGS';
+export type ViewMode = 'DASHBOARD' | 'INVENTORY' | 'INBOUND' | 'OUTBOUND' | 'REPORTS' | 'SETTINGS' | 'HISTORY';

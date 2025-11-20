@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { 
   LayoutDashboard, 
@@ -5,7 +6,8 @@ import {
   ArrowDownLeft, 
   ArrowUpRight, 
   Settings, 
-  Boxes
+  Boxes,
+  History
 } from 'lucide-react';
 import { ViewMode } from '../types';
 
@@ -21,6 +23,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
     { id: 'INBOUND' as ViewMode, label: '入库登记', icon: ArrowDownLeft, subtext: 'Receiving' },
     { id: 'OUTBOUND' as ViewMode, label: '出库登记', icon: ArrowUpRight, subtext: 'Delivery' },
     { id: 'INVENTORY' as ViewMode, label: '库存状态查询', icon: PackageSearch, subtext: 'Query' },
+    { id: 'HISTORY' as ViewMode, label: '出入库记录', icon: History, subtext: 'History' },
     { id: 'SETTINGS' as ViewMode, label: '系统配置', icon: Settings, subtext: 'Customization' },
   ];
 
@@ -67,7 +70,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
       {/* Footer */}
       <div className="p-4 border-t border-slate-800 text-center lg:text-left">
         <div className="hidden lg:block">
-          <p className="text-xs text-slate-500">Version 2.5.0</p>
+          <p className="text-xs text-slate-500">Version 2.6.0</p>
           <p className="text-[10px] text-slate-600 mt-1">© 2025 酒店库存系统</p>
         </div>
       </div>

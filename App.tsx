@@ -1,10 +1,10 @@
 
-
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import InventoryList from './components/InventoryList';
 import TransactionForm from './components/TransactionForm';
+import TransactionHistory from './components/TransactionHistory';
 import Settings from './components/Settings';
 import { 
   InventoryItem, 
@@ -15,7 +15,7 @@ import {
   TransactionType 
 } from './types';
 import { db } from './services/storage';
-import { Boxes, Loader2, AlertTriangle, Terminal, Copy, Check } from 'lucide-react';
+import { Loader2, AlertTriangle, Copy, Check } from 'lucide-react';
 
 const App: React.FC = () => {
   // --- Global State ---
@@ -90,43 +90,100 @@ const App: React.FC = () => {
     }
   };
 
-  const handleTransaction = async (itemId: string, quantity: number, notes: string) => {
-    const item = items.find(i => i.id === itemId);
-    if (!item) return;
-
-    const isOutbound = currentView === 'OUTBOUND';
-    // Update Stock Logic
-    const newQuantity = isOutbound ? item.quantity - quantity : item.quantity + quantity;
-    const updatedItem = {
-      ...item,
-      quantity: newQuantity,
-      lastUpdated: new Date().toISOString()
-    };
-
-    // Create Transaction Record
-    const newTx: Transaction = {
-      id: `tx_${Date.now()}`,
-      itemId: item.id,
-      itemName: item.name,
-      type: isOutbound ? TransactionType.OUTBOUND : TransactionType.INBOUND,
-      quantity,
-      timestamp: new Date().toISOString(),
-      user: '管理员', 
-      notes
-    };
-
+  // 批量处理入库/出库
+  const handleBatchTransaction = async (entries: { itemId: string; quantity: number; notes: string }[]) => {
     try {
-      // Execute both updates
-      await Promise.all([
-        db.updateItem(updatedItem),
-        db.addTransaction(newTx)
-      ]);
+      const isOutbound = currentView === 'OUTBOUND';
+      const timestamp = new Date().toISOString();
+      const type = isOutbound ? TransactionType.OUTBOUND : TransactionType.INBOUND;
 
-      // Update Local State
-      setItems(prev => prev.map(i => i.id === updatedItem.id ? updatedItem : i));
-      setTransactions(prev => [newTx, ...prev]);
+      // 我们需要一个个串行处理，确保数据一致性
+      // 在真实后端中这应该是一个 Database Transaction (原子操作)
+      // 但在前端 Supabase 调用中，我们尽力模拟
+      
+      const updatedItems: InventoryItem[] = [];
+      const newTransactions: Transaction[] = [];
+
+      for (const entry of entries) {
+        const item = items.find(i => i.id === entry.itemId);
+        if (!item) continue;
+
+        // Calculate new quantity
+        const newQuantity = isOutbound ? item.quantity - entry.quantity : item.quantity + entry.quantity;
+        
+        const updatedItem = {
+          ...item,
+          quantity: newQuantity,
+          lastUpdated: timestamp
+        };
+
+        const newTx: Transaction = {
+          id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // Unique ID
+          itemId: item.id,
+          itemName: item.name,
+          type: type,
+          quantity: entry.quantity,
+          timestamp: timestamp,
+          user: '管理员', 
+          notes: entry.notes
+        };
+
+        // Execute DB updates
+        await db.updateItem(updatedItem);
+        await db.addTransaction(newTx);
+
+        updatedItems.push(updatedItem);
+        newTransactions.push(newTx);
+      }
+
+      // Batch Update Local State
+      setItems(prev => prev.map(item => {
+        const updated = updatedItems.find(u => u.id === item.id);
+        return updated || item;
+      }));
+      setTransactions(prev => [...newTransactions, ...prev]); // Add to top
+
     } catch (e: any) {
-      alert(`交易记录失败: ${e.message}`);
+      alert(`批量交易记录失败: ${e.message}`);
+    }
+  };
+
+  // 撤销交易 (Undo)
+  const handleUndoTransaction = async (tx: Transaction) => {
+    try {
+      const item = items.find(i => i.id === tx.itemId);
+      if (!item) {
+        alert("找不到对应商品，无法回滚库存。但可以删除记录。");
+        await db.deleteTransaction(tx.id);
+        setTransactions(prev => prev.filter(t => t.id !== tx.id));
+        return;
+      }
+
+      // 逻辑回滚：如果是入库，撤销就是减库存；如果是出库，撤销就是加库存
+      let reversedQuantity = item.quantity;
+      if (tx.type === TransactionType.INBOUND) {
+        reversedQuantity = item.quantity - tx.quantity;
+      } else if (tx.type === TransactionType.OUTBOUND) {
+        reversedQuantity = item.quantity + tx.quantity;
+      }
+
+      const updatedItem = {
+        ...item,
+        quantity: reversedQuantity,
+        lastUpdated: new Date().toISOString()
+      };
+
+      // 1. 更新商品库存
+      await db.updateItem(updatedItem);
+      // 2. 删除交易记录
+      await db.deleteTransaction(tx.id);
+
+      // 更新本地状态
+      setItems(prev => prev.map(i => i.id === updatedItem.id ? updatedItem : i));
+      setTransactions(prev => prev.filter(t => t.id !== tx.id));
+
+    } catch (e: any) {
+      alert(`撤销失败: ${e.message}`);
     }
   };
 
@@ -345,7 +402,7 @@ ALTER TABLE locations DISABLE ROW LEVEL SECURITY;
           <TransactionForm 
             type={TransactionType.INBOUND} 
             items={items} 
-            onSubmit={handleTransaction} 
+            onSubmit={handleBatchTransaction} 
           />
         );
       case 'OUTBOUND':
@@ -353,7 +410,14 @@ ALTER TABLE locations DISABLE ROW LEVEL SECURITY;
           <TransactionForm 
             type={TransactionType.OUTBOUND} 
             items={items} 
-            onSubmit={handleTransaction} 
+            onSubmit={handleBatchTransaction} 
+          />
+        );
+      case 'HISTORY':
+        return (
+          <TransactionHistory 
+            transactions={transactions}
+            onUndo={handleUndoTransaction}
           />
         );
       case 'SETTINGS':
@@ -379,6 +443,7 @@ ALTER TABLE locations DISABLE ROW LEVEL SECURITY;
       case 'INVENTORY': return '库存状态查询';
       case 'INBOUND': return '入库登记';
       case 'OUTBOUND': return '出库登记';
+      case 'HISTORY': return '出入库历史记录';
       case 'SETTINGS': return '系统配置';
       default: return '库存管理系统';
     }
