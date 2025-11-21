@@ -49,4 +49,4 @@ export interface User {
   createdAt?: string;
 }
 
-export type ViewMode = 'DASHBOARD' | 'INVENTORY' | 'INBOUND' | 'OUTBOUND' | 'REPORTS' | 'SETTINGS' | 'HISTORY';
+export type ViewMode = 'DASHBOARD' | 'INVENTORY' | 'INBOUND' | 'OUTBOUND' | 'REPORTS' | 'SETTINGS' | 'HISTORY' | 'LOW_STOCK';

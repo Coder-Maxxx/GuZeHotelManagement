@@ -417,7 +417,7 @@ const InventoryList: React.FC<InventoryListProps> = ({
                   type="submit"
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 shadow-sm transition-colors"
                 >
-                  保存商品
+                  {Number(newItem.quantity) > 0 ? '保存商品并入库' : '保存商品'}
                 </button>
               </div>
             </form>

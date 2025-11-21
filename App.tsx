@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
@@ -102,18 +103,40 @@ const App: React.FC = () => {
     setTransactions([]);
   };
   
-  const handleAddItem = async (newItemData: Omit<InventoryItem, 'id' | 'lastUpdated'>) => {
+  const handleAddItem = async (newItemData: Omit<InventoryItem, 'id' | 'lastUpdated'>): Promise<InventoryItem | undefined> => {
+    const timestamp = new Date().toISOString();
     const newItem: InventoryItem = {
       ...newItemData,
       id: `item_${Date.now()}`,
-      lastUpdated: new Date().toISOString(),
+      lastUpdated: timestamp,
     };
     
     try {
+      // 1. Create Item
       await db.addItem(newItem);
       setItems(prev => [...prev, newItem]);
+
+      // 2. If initial quantity > 0, create a corresponding transaction record
+      // Note: For "Quick Add" in TransactionForm, quantity is passed as 0, so this won't run (correctly).
+      if (newItem.quantity > 0) {
+        const newTx: Transaction = {
+          id: `tx_init_${newItem.id}`,
+          itemId: newItem.id,
+          itemName: newItem.name,
+          type: TransactionType.INBOUND,
+          quantity: newItem.quantity,
+          timestamp: timestamp,
+          user: currentUser?.username || '系统',
+          notes: '初始库存录入'
+        };
+        await db.addTransaction(newTx);
+        setTransactions(prev => [newTx, ...prev]);
+      }
+
+      return newItem; // Return the item so TransactionForm can use it
     } catch (e: any) {
       alert(`添加失败: ${e.message}`);
+      return undefined;
     }
   };
 
@@ -353,7 +376,18 @@ INSERT INTO users (id, username, password, role)
 VALUES ('user_admin', 'admin', '123456', 'admin')
 ON CONFLICT (username) DO NOTHING;
 
--- 3. 关键：关闭 RLS 权限检查
+-- 3. RPC 函数 (用于前端 SQL 执行)
+CREATE OR REPLACE FUNCTION exec_sql(query text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  EXECUTE query;
+END;
+$$;
+
+-- 4. 关键：关闭 RLS 权限检查
 ALTER TABLE items DISABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions DISABLE ROW LEVEL SECURITY;
 ALTER TABLE categories DISABLE ROW LEVEL SECURITY;
@@ -388,10 +422,23 @@ ALTER TABLE users DISABLE ROW LEVEL SECURITY;
           <div className="p-8 space-y-6">
             <div className="prose prose-slate dark:prose-invert">
               <p className="text-slate-600 dark:text-slate-300">
-                请确保您已在 Supabase 中创建了所有必要的表（包括新增的 <code>users</code> 表）。
+                请确保您已在 Supabase 中创建了所有必要的表（包括新增的 <code>users</code> 表和 <code>exec_sql</code> 函数）。
               </p>
             </div>
-            {/* SQL Block ... same as before */}
+            
+            <div className="bg-slate-900 rounded-lg p-4 relative">
+              <button 
+                onClick={copySQL}
+                className="absolute top-3 right-3 bg-white/10 hover:bg-white/20 text-white px-3 py-1 rounded text-xs flex items-center gap-1 transition-colors"
+              >
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+                {copied ? '已复制' : '复制 SQL'}
+              </button>
+              <pre className="text-xs text-blue-300 font-mono overflow-x-auto max-h-60 custom-scrollbar">
+                {`-- 全量建表语句 (含 RPC)...`}
+              </pre>
+            </div>
+
             <div className="flex justify-end gap-4 pt-4">
               <button 
                 onClick={() => {
@@ -429,6 +476,7 @@ ALTER TABLE users DISABLE ROW LEVEL SECURITY;
             transactions={transactions} 
             categories={categories}
             onInitialize={handleResetData}
+            onViewLowStock={() => setCurrentView('LOW_STOCK')}
           />
         );
       case 'INVENTORY':
@@ -442,12 +490,28 @@ ALTER TABLE users DISABLE ROW LEVEL SECURITY;
             onDeleteItem={handleDeleteItem}
           />
         );
+      case 'LOW_STOCK':
+        return (
+          <InventoryList 
+            items={items.filter(i => i.quantity <= i.minStockLevel)} 
+            categories={categories} 
+            locations={locations}
+            onAddItem={handleAddItem}
+            onUpdateItem={handleUpdateItem}
+            onDeleteItem={handleDeleteItem}
+          />
+        );
       case 'INBOUND':
         return (
           <TransactionForm 
             type={TransactionType.INBOUND} 
             items={items} 
-            onSubmit={handleBatchTransaction} 
+            categories={categories}
+            locations={locations}
+            onAddItem={handleAddItem}
+            onSubmit={handleBatchTransaction}
+            onAddCategory={handleAddCategory}
+            onAddLocation={handleAddLocation}
           />
         );
       case 'OUTBOUND':
@@ -455,6 +519,10 @@ ALTER TABLE users DISABLE ROW LEVEL SECURITY;
           <TransactionForm 
             type={TransactionType.OUTBOUND} 
             items={items} 
+            // 出库不需要添加商品的功能
+            categories={[]} 
+            locations={[]}
+            onAddItem={async () => undefined}
             onSubmit={handleBatchTransaction} 
           />
         );
@@ -487,6 +555,7 @@ ALTER TABLE users DISABLE ROW LEVEL SECURITY;
     switch(currentView) {
       case 'DASHBOARD': return '仪表盘总览';
       case 'INVENTORY': return '库存状态查询';
+      case 'LOW_STOCK': return '库存预警清单';
       case 'INBOUND': return '入库登记';
       case 'OUTBOUND': return '出库登记';
       case 'HISTORY': return '出入库历史记录';

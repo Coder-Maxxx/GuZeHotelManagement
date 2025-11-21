@@ -21,9 +21,10 @@ interface DashboardProps {
   transactions: Transaction[];
   categories: Category[];
   onInitialize?: () => void;
+  onViewLowStock?: () => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ items, transactions, categories, onInitialize }) => {
+const Dashboard: React.FC<DashboardProps> = ({ items, transactions, categories, onInitialize, onViewLowStock }) => {
   
   // If no items, show initialization prompt
   if (items.length === 0) {
@@ -96,16 +97,21 @@ const Dashboard: React.FC<DashboardProps> = ({ items, transactions, categories, 
           </div>
         </div>
 
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex items-center justify-between">
-          <div>
+        <div 
+          onClick={onViewLowStock}
+          className={`bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex items-center justify-between cursor-pointer hover:shadow-md transition-all group relative overflow-hidden`}
+        >
+          <div className="relative z-10">
             <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">库存预警</p>
             <h3 className={`text-2xl font-bold ${lowStockItems.length > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-800 dark:text-white'}`}>
               {lowStockItems.length}
             </h3>
           </div>
-          <div className={`p-3 rounded-full ${lowStockItems.length > 0 ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400' : 'bg-slate-50 dark:bg-slate-700 text-slate-400 dark:text-slate-500'}`}>
+          <div className={`p-3 rounded-full relative z-10 ${lowStockItems.length > 0 ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400' : 'bg-slate-50 dark:bg-slate-700 text-slate-400 dark:text-slate-500'}`}>
             <AlertTriangle size={24} />
           </div>
+          {/* Hover indicator */}
+          <div className="absolute inset-0 bg-slate-50 dark:bg-slate-700/30 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
         </div>
 
         <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col justify-center space-y-2">
@@ -160,7 +166,17 @@ const Dashboard: React.FC<DashboardProps> = ({ items, transactions, categories, 
 
         {/* Low Stock Warning Chart */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700">
-          <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-4">低库存预警</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-slate-800 dark:text-white">低库存预警</h3>
+            {lowStockItems.length > 0 && (
+               <button 
+                 onClick={onViewLowStock}
+                 className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+               >
+                 查看详情
+               </button>
+            )}
+          </div>
           {lowStockData.length > 0 ? (
             <div className="h-64 w-full">
               <ResponsiveContainer width="100%" height="100%">

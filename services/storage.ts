@@ -189,6 +189,13 @@ export const db = {
     if (error) throw error;
   },
 
+  // --- 智能导入 (Smart SQL Import) ---
+  // 调用 Supabase RPC 函数执行原生 SQL
+  executeSql: async (sql: string): Promise<void> => {
+    const { error } = await supabase.rpc('exec_sql', { query: sql });
+    if (error) throw error;
+  },
+
   // --- 系统重置 / 数据初始化 ---
   // 修改逻辑：保留基础数据，仅清空库存和交易记录
   resetDatabase: async () => {
