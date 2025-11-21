@@ -231,17 +231,17 @@ const TransactionForm: React.FC<TransactionFormProps> = ({ type, items, categori
   }, [items, tempItems]);
 
   const handleAddRow = () => {
-    setEntries([...entries, { id: Date.now(), itemId: '', quantity: 1, notes: '' }]);
+    setEntries(prev => [...prev, { id: Date.now(), itemId: '', quantity: 1, notes: '' }]);
   };
 
   const handleRemoveRow = (id: number) => {
     if (entries.length > 1) {
-      setEntries(entries.filter(e => e.id !== id));
+      setEntries(prev => prev.filter(e => e.id !== id));
     }
   };
 
   const handleEntryChange = (id: number, field: keyof Entry, value: any) => {
-    setEntries(entries.map(entry => 
+    setEntries(prevEntries => prevEntries.map(entry => 
       entry.id === id ? { ...entry, [field]: value } : entry
     ));
   };
@@ -321,11 +321,13 @@ const TransactionForm: React.FC<TransactionFormProps> = ({ type, items, categori
       // Add to local temp cache so UI updates immediately
       setTempItems(prev => [...prev, createdItem]);
 
-      // Update the specific row with the new Item ID (This auto-fills the item select in the form)
-      handleEntryChange(pendingRowId, 'itemId', createdItem.id);
-      
-      // Also update the quantity in the row to match what was just saved (if user changed it in modal)
-      handleEntryChange(pendingRowId, 'quantity', qty);
+      // ATOMIC UPDATE: Update both itemId and quantity in a single state update
+      // This prevents stale state issues where one update overwrites the other
+      setEntries(prevEntries => prevEntries.map(entry => 
+        entry.id === pendingRowId 
+          ? { ...entry, itemId: createdItem.id, quantity: qty }
+          : entry
+      ));
 
       setShowAddModal(false);
       setPendingItemName('');
