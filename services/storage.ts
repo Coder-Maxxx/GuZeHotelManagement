@@ -125,6 +125,14 @@ export const db = {
     return data as InventoryItem;
   },
 
+  // 批量添加/更新商品 (Upsert)
+  addItemsBatch: async (items: InventoryItem[]): Promise<void> => {
+    if (items.length === 0) return;
+    // upsert 根据 id 更新或插入
+    const { error } = await supabase.from('items').upsert(items);
+    if (error) throw error;
+  },
+
   updateItem: async (item: InventoryItem): Promise<InventoryItem> => {
     // 忽略 id 字段的更新（它是主键），更新其他字段
     const { data, error } = await supabase
@@ -154,6 +162,13 @@ export const db = {
     if (error) throw error;
   },
 
+  // 批量删除商品
+  deleteItemsBatch: async (ids: string[]): Promise<void> => {
+    if (ids.length === 0) return;
+    const { error } = await supabase.from('items').delete().in('id', ids);
+    if (error) throw error;
+  },
+
   // --- 交易记录 (Transactions) ---
   addTransaction: async (tx: Transaction): Promise<Transaction> => {
     const { data, error } = await supabase.from('transactions').insert(tx).select().single();
@@ -161,8 +176,22 @@ export const db = {
     return data as Transaction;
   },
 
+  // 批量添加交易记录
+  addTransactionsBatch: async (transactions: Transaction[]): Promise<void> => {
+    if (transactions.length === 0) return;
+    const { error } = await supabase.from('transactions').insert(transactions);
+    if (error) throw error;
+  },
+
   deleteTransaction: async (id: string): Promise<void> => {
     const { error } = await supabase.from('transactions').delete().eq('id', id);
+    if (error) throw error;
+  },
+
+  // 批量删除交易记录
+  deleteTransactionsBatch: async (ids: string[]): Promise<void> => {
+    if (ids.length === 0) return;
+    const { error } = await supabase.from('transactions').delete().in('id', ids);
     if (error) throw error;
   },
 

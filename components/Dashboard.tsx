@@ -10,7 +10,7 @@ import {
   ResponsiveContainer, 
   PieChart, 
   Pie, 
-  Cell,
+  Cell, 
   Legend 
 } from 'recharts';
 import { AlertTriangle, Package, ArrowDownLeft, ArrowUpRight, TrendingUp, Database } from 'lucide-react';
@@ -22,9 +22,10 @@ interface DashboardProps {
   categories: Category[];
   onInitialize?: () => void;
   onViewLowStock?: () => void;
+  onViewHistory?: () => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ items, transactions, categories, onInitialize, onViewLowStock }) => {
+const Dashboard: React.FC<DashboardProps> = ({ items, transactions, categories, onInitialize, onViewLowStock, onViewHistory }) => {
   
   // If no items, show initialization prompt
   if (items.length === 0) {
@@ -114,18 +115,23 @@ const Dashboard: React.FC<DashboardProps> = ({ items, transactions, categories, 
           <div className="absolute inset-0 bg-slate-50 dark:bg-slate-700/30 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
         </div>
 
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col justify-center space-y-2">
-           <div className="flex items-center justify-between">
+        <div 
+          onClick={onViewHistory}
+          className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col justify-center space-y-2 cursor-pointer hover:shadow-md transition-all group relative overflow-hidden"
+        >
+           <div className="flex items-center justify-between relative z-10">
               <span className="flex items-center text-sm text-slate-600 dark:text-slate-300"><ArrowDownLeft className="w-4 h-4 mr-1 text-green-500" /> 入库单</span>
               <span className="font-semibold text-slate-800 dark:text-white">{inboundCount}</span>
            </div>
-           <div className="w-full bg-slate-100 dark:bg-slate-700 h-1.5 rounded-full overflow-hidden">
+           <div className="w-full bg-slate-100 dark:bg-slate-700 h-1.5 rounded-full overflow-hidden relative z-10">
               <div className="bg-green-500 h-full" style={{ width: `${(inboundCount / (inboundCount + outboundCount || 1)) * 100}%` }}></div>
            </div>
-           <div className="flex items-center justify-between">
+           <div className="flex items-center justify-between relative z-10">
               <span className="flex items-center text-sm text-slate-600 dark:text-slate-300"><ArrowUpRight className="w-4 h-4 mr-1 text-orange-500" /> 出库单</span>
               <span className="font-semibold text-slate-800 dark:text-white">{outboundCount}</span>
            </div>
+           {/* Hover indicator */}
+           <div className="absolute inset-0 bg-slate-50 dark:bg-slate-700/30 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
         </div>
       </div>
 

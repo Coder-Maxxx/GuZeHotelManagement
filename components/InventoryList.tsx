@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, Plus, Filter, Edit2, Trash2, Info, Download } from 'lucide-react';
+import { Search, Plus, Filter, Edit2, Trash2, Info, Download, CheckSquare, Square, Check } from 'lucide-react';
 import { InventoryItem, Category, Location } from '../types';
 import * as XLSX from 'xlsx';
 
@@ -11,6 +11,7 @@ interface InventoryListProps {
   onAddItem: (item: Omit<InventoryItem, 'id' | 'lastUpdated'>) => void;
   onUpdateItem: (item: InventoryItem) => void;
   onDeleteItem: (id: string) => void;
+  onBatchDelete?: (ids: string[]) => void; // New prop
 }
 
 // Internal state interface allowing strings for numeric fields during editing
@@ -31,12 +32,14 @@ const InventoryList: React.FC<InventoryListProps> = ({
   locations, 
   onAddItem, 
   onUpdateItem,
-  onDeleteItem 
+  onDeleteItem,
+  onBatchDelete
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('All');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
   // Form states
   const [newItem, setNewItem] = useState<ItemFormData>({
@@ -77,6 +80,32 @@ const InventoryList: React.FC<InventoryListProps> = ({
       return matchesSearch && matchesCategory;
     });
   }, [items, searchTerm, filterCategory]);
+
+  // Selection Logic
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredItems.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredItems.map(i => i.id)));
+    }
+  };
+
+  const toggleSelectOne = (id: string) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setSelectedIds(newSet);
+  };
+
+  const handleBatchDeleteAction = () => {
+    if (onBatchDelete) {
+      onBatchDelete(Array.from(selectedIds));
+      setSelectedIds(new Set());
+    }
+  };
 
   const handleExport = () => {
     const headers = ['商品名称', '分类', '位置', '当前数量', '单位', '单价(¥)', '总价值(¥)', '最低库存预警', '备注/规格', '更新时间'];
@@ -197,7 +226,17 @@ const InventoryList: React.FC<InventoryListProps> = ({
           />
         </div>
         
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {selectedIds.size > 0 && (
+            <button 
+              onClick={handleBatchDeleteAction}
+              className="flex items-center gap-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+            >
+              <Trash2 size={18} />
+              批量删除 ({selectedIds.size})
+            </button>
+          )}
+
           <div className="relative">
             <select 
               className="appearance-none pl-9 pr-8 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer transition-all"
@@ -234,6 +273,11 @@ const InventoryList: React.FC<InventoryListProps> = ({
         <table className="w-full text-left border-collapse">
           <thead className="bg-slate-50 dark:bg-slate-700/50 sticky top-0 z-10 shadow-sm">
             <tr>
+              <th className="p-4 w-12">
+                <button onClick={toggleSelectAll} className="text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300">
+                  {filteredItems.length > 0 && selectedIds.size === filteredItems.length ? <CheckSquare size={18} /> : <Square size={18} />}
+                </button>
+              </th>
               <th className="p-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">商品信息</th>
               <th className="p-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">分类/位置</th>
               <th className="p-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider text-right">库存</th>
@@ -245,7 +289,12 @@ const InventoryList: React.FC<InventoryListProps> = ({
           <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
             {filteredItems.length > 0 ? (
               filteredItems.map(item => (
-                <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors group">
+                <tr key={item.id} className={`hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors group ${selectedIds.has(item.id) ? 'bg-blue-50 dark:bg-blue-900/10' : ''}`}>
+                  <td className="p-4">
+                    <button onClick={() => toggleSelectOne(item.id)} className="text-slate-400 hover:text-blue-500">
+                      {selectedIds.has(item.id) ? <CheckSquare size={18} className="text-blue-500" /> : <Square size={18} />}
+                    </button>
+                  </td>
                   <td className="p-4 max-w-xs">
                     <div className="font-medium text-slate-900 dark:text-white">{item.name}</div>
                     <div className="flex flex-col gap-0.5 mt-0.5">
@@ -307,7 +356,7 @@ const InventoryList: React.FC<InventoryListProps> = ({
               ))
             ) : (
               <tr>
-                <td colSpan={6} className="p-12 text-center text-slate-400 dark:text-slate-500">
+                <td colSpan={7} className="p-12 text-center text-slate-400 dark:text-slate-500">
                   <div className="flex flex-col items-center gap-2">
                     <Search size={32} className="opacity-20" />
                     <p>未找到匹配的商品。</p>

@@ -1,22 +1,53 @@
 
 import React, { useState } from 'react';
-import { Search, ArrowDownLeft, ArrowUpRight, RotateCcw, Calendar, User, FileText, History, Download } from 'lucide-react';
+import { Search, ArrowDownLeft, ArrowUpRight, RotateCcw, Calendar, User, FileText, History, Download, CheckSquare, Square } from 'lucide-react';
 import { Transaction, TransactionType } from '../types';
 import * as XLSX from 'xlsx';
 
 interface TransactionHistoryProps {
   transactions: Transaction[];
   onUndo: (transaction: Transaction) => void;
+  onBatchUndo?: (transactions: Transaction[]) => void; // New prop
 }
 
-const TransactionHistory: React.FC<TransactionHistoryProps> = ({ transactions, onUndo }) => {
+const TransactionHistory: React.FC<TransactionHistoryProps> = ({ transactions, onUndo, onBatchUndo }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const filteredTransactions = transactions.filter(t => 
     t.itemName.toLowerCase().includes(searchTerm.toLowerCase()) ||
     t.user.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (t.notes && t.notes.toLowerCase().includes(searchTerm.toLowerCase()))
   );
+
+  // Selection Logic
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredTransactions.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredTransactions.map(t => t.id)));
+    }
+  };
+
+  const toggleSelectOne = (id: string) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setSelectedIds(newSet);
+  };
+
+  const handleBatchUndoAction = () => {
+    if (onBatchUndo) {
+      const selectedTxs = transactions.filter(t => selectedIds.has(t.id));
+      if (window.confirm(`确定要撤销选中的 ${selectedTxs.length} 条记录吗？库存将自动回滚。`)) {
+        onBatchUndo(selectedTxs);
+        setSelectedIds(new Set());
+      }
+    }
+  };
 
   const handleExport = () => {
     const headers = ['交易ID', '商品名称', '类型', '数量', '操作人', '备注', '时间'];
@@ -44,7 +75,17 @@ const TransactionHistory: React.FC<TransactionHistoryProps> = ({ transactions, o
           <h2 className="text-lg font-bold text-slate-800 dark:text-white">出入库历史记录</h2>
           <p className="text-sm text-slate-500 dark:text-slate-400">查看所有库存变动明细，支持撤销最近的操作。</p>
         </div>
-        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto items-center">
+          {selectedIds.size > 0 && (
+            <button 
+              onClick={handleBatchUndoAction}
+              className="flex items-center gap-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm whitespace-nowrap"
+            >
+              <RotateCcw size={18} />
+              批量撤销 ({selectedIds.size})
+            </button>
+          )}
+
           <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-700 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 w-full sm:w-64 focus-within:ring-2 focus-within:ring-blue-500 focus-within:bg-white dark:focus-within:bg-slate-700 transition-all">
             <Search size={18} className="text-slate-400 dark:text-slate-400" />
             <input 
@@ -67,14 +108,31 @@ const TransactionHistory: React.FC<TransactionHistoryProps> = ({ transactions, o
         </div>
       </div>
 
+      {/* List Header with Select All */}
+      {filteredTransactions.length > 0 && (
+        <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-700/30 flex items-center">
+          <button onClick={toggleSelectAll} className="text-slate-400 hover:text-blue-500 mr-4">
+            {selectedIds.size > 0 && selectedIds.size === filteredTransactions.length ? <CheckSquare size={18} className="text-blue-500" /> : <Square size={18} />}
+          </button>
+          <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">全选 / 反选本页</span>
+        </div>
+      )}
+
       {/* List */}
       <div className="flex-1 overflow-auto custom-scrollbar p-4">
         <div className="space-y-3">
           {filteredTransactions.length > 0 ? (
             filteredTransactions.map((tx) => {
               const isInbound = tx.type === TransactionType.INBOUND;
+              const isSelected = selectedIds.has(tx.id);
               return (
-                <div key={tx.id} className="bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-lg p-4 hover:shadow-md transition-shadow flex flex-col md:flex-row gap-4 items-start md:items-center">
+                <div key={tx.id} className={`border border-slate-100 dark:border-slate-700 rounded-lg p-4 hover:shadow-md transition-shadow flex flex-col md:flex-row gap-4 items-start md:items-center ${isSelected ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-white dark:bg-slate-800'}`}>
+                  
+                  {/* Checkbox */}
+                  <button onClick={() => toggleSelectOne(tx.id)} className="text-slate-400 hover:text-blue-500">
+                    {isSelected ? <CheckSquare size={18} className="text-blue-500" /> : <Square size={18} />}
+                  </button>
+
                   {/* Icon */}
                   <div className={`p-3 rounded-full flex-shrink-0 ${isInbound ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400' : 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400'}`}>
                     {isInbound ? <ArrowDownLeft size={20} /> : <ArrowUpRight size={20} />}

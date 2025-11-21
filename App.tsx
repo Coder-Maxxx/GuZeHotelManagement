@@ -17,7 +17,7 @@ import {
   User 
 } from './types';
 import { db } from './services/storage';
-import { Loader2, AlertTriangle, Copy, Check, Sun, Moon } from 'lucide-react';
+import { Loader2, AlertTriangle, Sun, Moon } from 'lucide-react';
 
 const App: React.FC = () => {
   // --- Global State ---
@@ -31,7 +31,6 @@ const App: React.FC = () => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
-  const [copied, setCopied] = useState(false);
 
   // --- Theme & Session Check on Mount ---
   useEffect(() => {
@@ -161,6 +160,18 @@ const App: React.FC = () => {
     }
   };
 
+  const handleBatchDeleteItems = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    if (window.confirm(`确定要删除选中的 ${ids.length} 个商品吗？此操作不可撤销。`)) {
+      try {
+        await db.deleteItemsBatch(ids);
+        setItems(prev => prev.filter(i => !ids.includes(i.id)));
+      } catch (e: any) {
+        alert(`批量删除失败: ${e.message}`);
+      }
+    }
+  };
+
   // 批量处理入库/出库
   const handleBatchTransaction = async (entries: { itemId: string; quantity: number; notes: string }[]) => {
     try {
@@ -214,58 +225,76 @@ const App: React.FC = () => {
 
   // 撤销交易 (Undo)
   const handleUndoTransaction = async (tx: Transaction) => {
+    await handleBatchUndoTransactions([tx]);
+  };
+
+  // 批量撤销交易
+  const handleBatchUndoTransactions = async (txs: Transaction[]) => {
+    if (txs.length === 0) return;
+    
     try {
-      console.log("Starting undo for tx:", tx.id);
+      console.log(`Starting batch undo for ${txs.length} transactions`);
+      const txIds = txs.map(t => t.id);
+      const itemUpdates = new Map<string, { item: InventoryItem, delta: number }>();
+
+      // 1. Calculate Net Impact per Item
+      for (const tx of txs) {
+        const currentItem = items.find(i => i.id === tx.itemId);
+        
+        // If item exists, accumulate delta
+        if (currentItem) {
+          let delta = 0;
+          const txQty = Number(tx.quantity);
+          
+          // Undo Inbound = Subtract Qty
+          // Undo Outbound = Add Qty
+          if (tx.type === TransactionType.INBOUND) {
+            delta = -txQty;
+          } else {
+            delta = txQty;
+          }
+
+          if (itemUpdates.has(currentItem.id)) {
+            itemUpdates.get(currentItem.id)!.delta += delta;
+          } else {
+            itemUpdates.set(currentItem.id, { item: currentItem, delta });
+          }
+        }
+      }
+
+      // 2. Update Items in DB and prepare local updates
+      const updatedItemsList: InventoryItem[] = [];
       
-      // 1. Find the related item
-      const currentItem = items.find(i => i.id === tx.itemId);
-      if (!currentItem) {
-        // 即使找不到商品（可能被删了），也允许删除这条孤立的记录
-        alert("关联商品已不存在，将仅删除交易记录。");
-        await db.deleteTransaction(tx.id);
-        // 手动更新本地状态
-        setTransactions(prev => prev.filter(t => t.id !== tx.id));
-        alert("撤销成功（仅记录删除）");
-        return;
+      for (const { item, delta } of itemUpdates.values()) {
+        if (delta !== 0) {
+          const newQuantity = Number(item.quantity) + delta;
+          const updatedItem = {
+            ...item,
+            quantity: newQuantity,
+            lastUpdated: new Date().toISOString()
+          };
+          
+          await db.updateItem(updatedItem);
+          updatedItemsList.push(updatedItem);
+        }
       }
 
-      // 2. Calculate reversed quantity
-      let reversedQuantity = Number(currentItem.quantity); 
-      const txQty = Number(tx.quantity);
+      // 3. Delete Transactions in DB
+      await db.deleteTransactionsBatch(txIds);
 
-      if (tx.type === TransactionType.INBOUND) {
-        // 如果是撤销入库，则减库存
-        reversedQuantity = reversedQuantity - txQty;
-      } else {
-        // 如果是撤销出库，则加库存
-        reversedQuantity = reversedQuantity + txQty;
-      }
+      // 4. Manual State Update
+      setItems(prev => prev.map(i => {
+        const updated = updatedItemsList.find(u => u.id === i.id);
+        return updated || i;
+      }));
+      
+      setTransactions(prev => prev.filter(t => !txIds.includes(t.id)));
 
-      if (isNaN(reversedQuantity)) {
-        throw new Error("数量计算错误，请联系管理员");
-      }
-
-      const updatedItem = {
-        ...currentItem,
-        quantity: reversedQuantity,
-        lastUpdated: new Date().toISOString()
-      };
-
-      // 3. Update DB: Item first, then delete Tx
-      await db.updateItem(updatedItem);
-      await db.deleteTransaction(tx.id);
-
-      // 4. Manual State Update (Critical for UX - prevents flicker)
-      // Update Item List
-      setItems(prev => prev.map(i => i.id === updatedItem.id ? updatedItem : i));
-      // Remove Transaction
-      setTransactions(prev => prev.filter(t => t.id !== tx.id));
-
-      alert(`撤销成功！\n商品 "${updatedItem.name}" 的最新库存已更新为: ${updatedItem.quantity}`);
+      alert(`成功撤销 ${txs.length} 条记录！库存已更新。`);
 
     } catch (e: any) {
-      console.error("Undo failed", e);
-      alert(`撤销失败: ${e.message}`);
+      console.error("Batch undo failed", e);
+      alert(`批量撤销失败: ${e.message}`);
     }
   };
 
@@ -325,80 +354,6 @@ const App: React.FC = () => {
     }
   };
 
-  const copySQL = () => {
-    const sql = `-- 1. 创建表结构
-CREATE TABLE IF NOT EXISTS items (
-  id text PRIMARY KEY,
-  name text NOT NULL,
-  category text,
-  location text,
-  quantity numeric DEFAULT 0,
-  unit text,
-  "minStockLevel" numeric DEFAULT 0,
-  price numeric DEFAULT 0,
-  "lastUpdated" text,
-  description text
-);
-
-CREATE TABLE IF NOT EXISTS transactions (
-  id text PRIMARY KEY,
-  "itemId" text,
-  "itemName" text,
-  type text,
-  quantity numeric,
-  timestamp text,
-  "user" text,
-  notes text
-);
-
-CREATE TABLE IF NOT EXISTS categories (
-  id text PRIMARY KEY,
-  name text,
-  color text
-);
-
-CREATE TABLE IF NOT EXISTS locations (
-  id text PRIMARY KEY,
-  name text
-);
-
--- 用户表 (新)
-CREATE TABLE IF NOT EXISTS users (
-  id text PRIMARY KEY,
-  username text UNIQUE NOT NULL,
-  password text NOT NULL,
-  role text NOT NULL DEFAULT 'user',
-  "createdAt" timestamp with time zone DEFAULT now()
-);
-
--- 2. 默认管理员 (admin / 123456)
-INSERT INTO users (id, username, password, role) 
-VALUES ('user_admin', 'admin', '123456', 'admin')
-ON CONFLICT (username) DO NOTHING;
-
--- 3. RPC 函数 (用于前端 SQL 执行)
-CREATE OR REPLACE FUNCTION exec_sql(query text)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-BEGIN
-  EXECUTE query;
-END;
-$$;
-
--- 4. 关键：关闭 RLS 权限检查
-ALTER TABLE items DISABLE ROW LEVEL SECURITY;
-ALTER TABLE transactions DISABLE ROW LEVEL SECURITY;
-ALTER TABLE categories DISABLE ROW LEVEL SECURITY;
-ALTER TABLE locations DISABLE ROW LEVEL SECURITY;
-ALTER TABLE users DISABLE ROW LEVEL SECURITY;
-`;
-    navigator.clipboard.writeText(sql);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
   // --- Render: Login Check ---
   if (!currentUser) {
     return <Login onLogin={handleLogin} />;
@@ -422,21 +377,8 @@ ALTER TABLE users DISABLE ROW LEVEL SECURITY;
           <div className="p-8 space-y-6">
             <div className="prose prose-slate dark:prose-invert">
               <p className="text-slate-600 dark:text-slate-300">
-                请确保您已在 Supabase 中创建了所有必要的表（包括新增的 <code>users</code> 表和 <code>exec_sql</code> 函数）。
+                请确保您已在 Supabase 中创建了所有必要的表（<code>items</code>, <code>transactions</code>, <code>categories</code>, <code>locations</code>, <code>users</code>）。
               </p>
-            </div>
-            
-            <div className="bg-slate-900 rounded-lg p-4 relative">
-              <button 
-                onClick={copySQL}
-                className="absolute top-3 right-3 bg-white/10 hover:bg-white/20 text-white px-3 py-1 rounded text-xs flex items-center gap-1 transition-colors"
-              >
-                {copied ? <Check size={14} /> : <Copy size={14} />}
-                {copied ? '已复制' : '复制 SQL'}
-              </button>
-              <pre className="text-xs text-blue-300 font-mono overflow-x-auto max-h-60 custom-scrollbar">
-                {`-- 全量建表语句 (含 RPC)...`}
-              </pre>
             </div>
 
             <div className="flex justify-end gap-4 pt-4">
@@ -477,6 +419,7 @@ ALTER TABLE users DISABLE ROW LEVEL SECURITY;
             categories={categories}
             onInitialize={handleResetData}
             onViewLowStock={() => setCurrentView('LOW_STOCK')}
+            onViewHistory={() => setCurrentView('HISTORY')}
           />
         );
       case 'INVENTORY':
@@ -488,6 +431,7 @@ ALTER TABLE users DISABLE ROW LEVEL SECURITY;
             onAddItem={handleAddItem}
             onUpdateItem={handleUpdateItem}
             onDeleteItem={handleDeleteItem}
+            onBatchDelete={handleBatchDeleteItems}
           />
         );
       case 'LOW_STOCK':
@@ -499,6 +443,7 @@ ALTER TABLE users DISABLE ROW LEVEL SECURITY;
             onAddItem={handleAddItem}
             onUpdateItem={handleUpdateItem}
             onDeleteItem={handleDeleteItem}
+            onBatchDelete={handleBatchDeleteItems}
           />
         );
       case 'INBOUND':
@@ -531,6 +476,7 @@ ALTER TABLE users DISABLE ROW LEVEL SECURITY;
           <TransactionHistory 
             transactions={transactions}
             onUndo={handleUndoTransaction}
+            onBatchUndo={handleBatchUndoTransactions}
           />
         );
       case 'SETTINGS':
@@ -538,12 +484,14 @@ ALTER TABLE users DISABLE ROW LEVEL SECURITY;
           <Settings 
             categories={categories} 
             locations={locations}
+            items={items}
             currentUser={currentUser}
             onAddCategory={handleAddCategory}
             onAddLocation={handleAddLocation}
             onDeleteCategory={handleDeleteCategory}
             onDeleteLocation={handleDeleteLocation}
             onResetData={handleResetData}
+            onRefresh={initData}
           />
         );
       default:

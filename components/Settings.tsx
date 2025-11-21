@@ -1,41 +1,56 @@
 
-import React, { useState } from 'react';
-import { Plus, X, Settings as SettingsIcon, Database, RotateCcw, Code, Play, Copy, Check, ShieldAlert } from 'lucide-react';
-import { Category, Location, User } from '../types';
+import React, { useState, useRef } from 'react';
+import { Plus, X, Settings as SettingsIcon, Database, RotateCcw, FileSpreadsheet, Copy, Check, Download, Upload, Loader2, AlertCircle, Trash2, XCircle } from 'lucide-react';
+import { Category, Location, User, InventoryItem, Transaction, TransactionType } from '../types';
 import UserManagement from './UserManagement';
 import { db } from '../services/storage';
+import * as XLSX from 'xlsx';
 
 interface SettingsProps {
   categories: Category[];
   locations: Location[];
+  items: InventoryItem[]; // Receive current items for duplicate checking
   currentUser: User;
   onAddCategory: (name: string, color: string) => void;
   onAddLocation: (name: string) => void;
   onDeleteCategory: (id: string) => void;
   onDeleteLocation: (id: string) => void;
   onResetData: () => void;
+  onRefresh?: () => void; // Add callback to refresh app data
+}
+
+// Define the structure of the row from Excel
+interface ExcelImportRow {
+  name: string;
+  category: string;
+  location: string;
+  quantity: number;
+  unit: string;
+  price: number;
+  minStockLevel: number;
+  description: string;
 }
 
 const Settings: React.FC<SettingsProps> = ({ 
   categories, 
   locations, 
+  items,
   currentUser,
   onAddCategory, 
   onAddLocation,
   onDeleteCategory,
   onDeleteLocation,
-  onResetData
+  onResetData,
+  onRefresh
 }) => {
   const [newCatName, setNewCatName] = useState('');
   const [newLocName, setNewLocName] = useState('');
   
-  // SQL Import State
-  const [sqlInput, setSqlInput] = useState('');
-  const [executingSql, setExecutingSql] = useState(false);
+  // Excel Import State
+  const [isImporting, setIsImporting] = useState(false);
+  const [previewData, setPreviewData] = useState<ExcelImportRow[]>([]);
   const [promptCopied, setPromptCopied] = useState(false);
-  
-  // Custom Confirm Modal State
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isAdmin = currentUser.role === 'admin';
 
@@ -57,48 +72,14 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const confirmExecuteSql = async () => {
-    setShowConfirmModal(false);
-    setExecutingSql(true);
-    try {
-      await db.executeSql(sqlInput);
-      alert("✅ SQL 执行成功！请前往[库存状态查询]查看导入结果。");
-      setSqlInput('');
-    } catch (e: any) {
-      alert(`❌ 执行失败: ${e.message}\n请检查 SQL 语法或 RPC 函数是否已在 Supabase 中创建。`);
-    } finally {
-      setExecutingSql(false);
-    }
-  };
+  // --- Excel Import Logic ---
 
-  const handleExecuteClick = () => {
-    if (!sqlInput.trim()) {
-      alert("请输入 SQL 语句");
-      return;
-    }
-
-    // --- 安全检查拦截器 ---
-    const dangerousKeywords = ['DROP ', 'DELETE ', 'TRUNCATE ', 'ALTER ', 'DROP\n', 'DELETE\n'];
-    const upperSql = sqlInput.toUpperCase();
-    
-    const foundRisk = dangerousKeywords.find(keyword => upperSql.includes(keyword));
-
-    if (foundRisk) {
-      alert(`🛑 安全拦截：检测到危险操作关键字 "${foundRisk.trim()}"。\n\n为了防止数据意外丢失，智能导入功能禁止删除或修改表结构。\n仅允许执行 INSERT (新增) 或 UPDATE (更新) 操作。`);
-      return;
-    }
-    // --------------------
-
-    setShowConfirmModal(true);
-  };
-
-  const aiPrompt = `请帮我把这张图片里的商品识别出来，并生成 SQL 插入语句。
-为了确保存档记录，请对每个商品同时生成两句 SQL（分别插入 items 和 transactions 表）：
-
-1. items 表：id (如 'imp_01'), name, quantity, unit, price, category, location (默认'总库房'), "lastUpdated" (NOW()), "minStockLevel" (10)。
-2. transactions 表：id (如 'tx_imp_01'), "itemId" (对应上面的id), "itemName", type ('INBOUND'), quantity, timestamp (NOW()), "user" ('AI导入'), notes ('智能导入')。
-
-请直接给我 SQL 代码，不要其他的。`;
+  const aiPrompt = `请帮我识别这张图片里的商品，并整理成一个表格。
+表头（列名）需要是：商品名称、分类、位置、数量、单位、单价、最低预警、备注。
+重要规则：
+1. 如果图片里没有的信息（比如位置），请默认填'总库房'。
+2. 商品名称中如果有括号（如规格、备注），请统一使用英文格式的括号 ()，不要使用中文括号 （）。
+请直接给我表格数据，不要代码，方便我复制到 Excel。`;
 
   const handleCopyPrompt = () => {
     navigator.clipboard.writeText(aiPrompt);
@@ -106,17 +87,190 @@ const Settings: React.FC<SettingsProps> = ({
     setTimeout(() => setPromptCopied(false), 2000);
   };
 
+  const handleDownloadTemplate = () => {
+    const headers = [['商品名称', '分类', '位置', '数量', '单位', '单价', '最低预警', '备注']];
+    const example = [['测试商品(防烫)', '清洁用品', '总库房', 100, '个', 5.5, 10, '示例备注']];
+    const ws = XLSX.utils.aoa_to_sheet([...headers, ...example]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "导入模板");
+    XLSX.writeFile(wb, `库存导入模板.xlsx`);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const rawData = XLSX.utils.sheet_to_json(ws);
+
+        if (rawData.length === 0) {
+          alert("表格为空或格式不正确");
+          return;
+        }
+
+        // 1. Parse and Consolidate within the file
+        const importMap = new Map<string, ExcelImportRow>();
+
+        rawData.forEach((row: any) => {
+          let name = row['商品名称'] ? String(row['商品名称']).trim() : '';
+          if (!name) return; // Skip empty names
+
+          // --- NORMALIZE NAME ---
+          // 1. Replace Chinese brackets with English
+          name = name.replace(/（/g, '(').replace(/）/g, ')');
+          // 2. Remove whitespace before opening bracket
+          name = name.replace(/\s+\(/g, '(');
+          // ----------------------
+
+          const qty = Number(row['数量']) || 0;
+          const newItem: ExcelImportRow = {
+            name: name,
+            category: row['分类'] || '默认分类',
+            location: row['位置'] || '总库房',
+            quantity: qty,
+            unit: row['单位'] || '个',
+            price: Number(row['单价']) || 0,
+            minStockLevel: Number(row['最低预警']) || 10,
+            description: row['备注'] || ''
+          };
+
+          if (importMap.has(name)) {
+            // Consolidate quantity if name exists in file
+            const existing = importMap.get(name)!;
+            existing.quantity += newItem.quantity;
+          } else {
+            importMap.set(name, newItem);
+          }
+        });
+
+        setPreviewData(Array.from(importMap.values()));
+      } catch (err) {
+        console.error(err);
+        alert("文件解析失败，请确保使用正确的模板。");
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  // Update a field in the preview list
+  const handleUpdatePreviewItem = (index: number, field: keyof ExcelImportRow, value: any) => {
+    const updatedItems = [...previewData];
+    updatedItems[index] = { ...updatedItems[index], [field]: value };
+    setPreviewData(updatedItems);
+  };
+
+  // Remove a row from preview
+  const handleRemovePreviewRow = (index: number) => {
+    const updatedItems = previewData.filter((_, i) => i !== index);
+    setPreviewData(updatedItems);
+  };
+
+  // Cancel Import
+  const handleCancelImport = () => {
+    // Immediately clear data without confirmation for better UX
+    setPreviewData([]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleConfirmImport = async () => {
+    if (previewData.length === 0) return;
+    setIsImporting(true);
+
+    try {
+      const timestamp = new Date().toISOString();
+      
+      const itemsToUpsert: InventoryItem[] = [];
+      const transactionsToInsert: Transaction[] = [];
+
+      // Create a map of existing items for O(1) lookup
+      const existingItemsMap = new Map(items.map(i => [i.name, i]));
+
+      previewData.forEach((row, index) => {
+        const existingItem = existingItemsMap.get(row.name);
+        const importQty = Number(row.quantity);
+
+        // Base item structure
+        let finalItem: InventoryItem;
+
+        if (existingItem) {
+          // MERGE LOGIC: Use existing metadata, sum quantity
+          finalItem = {
+            ...existingItem,
+            quantity: existingItem.quantity + importQty, // Add new stock to existing
+            lastUpdated: timestamp
+          };
+        } else {
+          // NEW ITEM: Use imported metadata
+          finalItem = {
+            id: `imp_${Date.now()}_${index}`,
+            name: row.name,
+            category: row.category,
+            location: row.location,
+            quantity: importQty,
+            unit: row.unit,
+            price: row.price,
+            minStockLevel: row.minStockLevel,
+            description: row.description,
+            lastUpdated: timestamp
+          };
+        }
+
+        itemsToUpsert.push(finalItem);
+
+        // Create Transaction Record only if quantity > 0
+        if (importQty > 0) {
+          transactionsToInsert.push({
+            id: `tx_imp_${Date.now()}_${index}`,
+            itemId: finalItem.id,
+            itemName: finalItem.name,
+            type: TransactionType.INBOUND,
+            quantity: importQty,
+            timestamp: timestamp,
+            user: currentUser.username,
+            notes: '批量导入'
+          });
+        }
+      });
+
+      // Batch insert to DB
+      await db.addItemsBatch(itemsToUpsert);
+      if (transactionsToInsert.length > 0) {
+        await db.addTransactionsBatch(transactionsToInsert);
+      }
+      
+      alert(`✅ 成功导入/更新 ${itemsToUpsert.length} 个商品！`);
+      
+      // Reset state
+      setPreviewData([]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      
+      // Trigger data refresh in parent
+      if (onRefresh) onRefresh();
+
+    } catch (e: any) {
+      alert(`❌ 导入失败: ${e.message}`);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   const inputClass = "flex-1 px-4 py-2 bg-slate-50 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white dark:focus:bg-slate-600 outline-none transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500";
+  const tableInputClass = "w-full bg-transparent border-b border-transparent focus:border-blue-500 outline-none text-slate-900 dark:text-slate-200 text-xs py-1";
 
   return (
-    <div className="space-y-8">
-      {/* 用户管理 - 放在最上面，因为这是新增的重要功能 */}
+    <div className="space-y-8 animate-fade-in">
+      {/* 用户管理 */}
       <UserManagement currentUser={currentUser} />
 
       {/* 管理员专区：分类和位置 */}
       {isAdmin ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          
           {/* Categories Settings */}
           <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 p-6">
             <div className="flex items-center gap-3 mb-6">
@@ -205,18 +359,17 @@ const Settings: React.FC<SettingsProps> = ({
         </div>
       )}
 
-      {/* Data Management - Admin Only */}
+      {/* Excel Batch Import */}
       {isAdmin && (
         <div className="space-y-6">
-          {/* AI Smart Import / SQL Execute */}
           <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 p-6">
             <div className="flex items-center gap-3 mb-6">
               <div className="p-2 bg-emerald-100 dark:bg-emerald-900/30 rounded-lg text-emerald-600 dark:text-emerald-400">
-                <Code size={20} />
+                <FileSpreadsheet size={20} />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-slate-800 dark:text-white">智能导入 (SQL)</h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">利用 AI 识别单据图片并生成 SQL，批量导入商品。</p>
+                <h2 className="text-lg font-bold text-slate-800 dark:text-white">批量导入 (Excel)</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">支持 AI 辅助转换，安全、直观地批量导入商品数据。</p>
               </div>
             </div>
 
@@ -237,31 +390,193 @@ const Settings: React.FC<SettingsProps> = ({
                </div>
             </div>
 
-            <div className="space-y-4">
-              <div className="relative">
-                <textarea
-                  className="w-full h-32 px-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-xs font-mono text-slate-800 dark:text-slate-200 outline-none focus:ring-2 focus:ring-emerald-500 placeholder:text-slate-400 dark:placeholder:text-slate-600"
-                  placeholder="在这里粘贴 AI 生成的 SQL 语句... 例如: INSERT INTO items (id, name...) VALUES ..."
-                  value={sqlInput}
-                  onChange={(e) => setSqlInput(e.target.value)}
-                />
-                {/* Security Badge */}
-                <div className="absolute bottom-3 right-3 flex items-center gap-1 text-[10px] text-slate-400 dark:text-slate-500 select-none">
-                   <ShieldAlert size={12} />
-                   <span>安全模式: 已禁用 DELETE/DROP</span>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
+              {/* Step 1: Download */}
+              <div className="flex flex-col gap-2 p-4 border border-slate-100 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-800/50 h-full">
+                <div className="flex items-center gap-2 font-bold text-slate-700 dark:text-slate-300">
+                   <span className="w-6 h-6 bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center text-xs">1</span>
+                   下载模板
                 </div>
-              </div>
-              <div className="flex justify-end">
-                <button
-                  onClick={handleExecuteClick}
-                  disabled={executingSql || !sqlInput.trim()}
-                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                <p className="text-xs text-slate-500 dark:text-slate-400 flex-1">获取标准的 Excel 导入模板文件。</p>
+                <button 
+                  onClick={handleDownloadTemplate}
+                  className="w-full py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-sm hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors flex items-center justify-center gap-2"
                 >
-                  <Play size={16} />
-                  {executingSql ? '执行中...' : '执行导入'}
+                  <Download size={16} /> 下载 Excel 模板
                 </button>
               </div>
+
+              {/* Step 2: Upload */}
+              <div className="flex flex-col gap-2 p-4 border border-slate-100 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-800/50 h-full">
+                <div className="flex items-center gap-2 font-bold text-slate-700 dark:text-slate-300">
+                   <span className="w-6 h-6 bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center text-xs">2</span>
+                   上传文件
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 flex-1">选择填好的 Excel 文件。</p>
+                <div className="relative">
+                   <input 
+                    type="file" 
+                    accept=".xlsx, .xls" 
+                    ref={fileInputRef}
+                    onChange={handleFileUpload}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                   />
+                   <button className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
+                     <Upload size={16} /> 选择文件...
+                   </button>
+                </div>
+              </div>
+
+              {/* Step 3: Confirm */}
+              <div className="flex flex-col gap-2 p-4 border border-slate-100 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-800/50 h-full">
+                <div className="flex items-center gap-2 font-bold text-slate-700 dark:text-slate-300">
+                   <span className="w-6 h-6 bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center text-xs">3</span>
+                   确认导入
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 flex-1">检查预览并执行导入。</p>
+                <div className="flex gap-2">
+                  {previewData.length > 0 && (
+                    <button 
+                      onClick={handleCancelImport}
+                      disabled={isImporting}
+                      className="flex-1 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                      title="取消导入"
+                    >
+                      <XCircle size={16} />
+                      取消
+                    </button>
+                  )}
+                  <button 
+                    onClick={handleConfirmImport}
+                    disabled={previewData.length === 0 || isImporting}
+                    className="flex-1 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isImporting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                    {isImporting ? '导入...' : `确认 (${previewData.length})`}
+                  </button>
+                </div>
+              </div>
             </div>
+
+            {/* Editable Preview Table */}
+            {previewData.length > 0 && (
+              <div className="mt-6 animate-fade-in">
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                    <FileSpreadsheet size={18} className="text-emerald-500" />
+                    数据预览 (可编辑)
+                  </h3>
+                  <span className="text-xs text-slate-500">若商品名称已存在，将自动合并数量；分类/位置以现有数据为准。</span>
+                </div>
+                <div className="overflow-x-auto max-h-[400px] border border-slate-200 dark:border-slate-700 rounded-lg custom-scrollbar bg-white dark:bg-slate-800">
+                  <table className="w-full text-left text-xs min-w-[800px]">
+                    <thead className="bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 sticky top-0 z-10">
+                      <tr>
+                        <th className="p-2 w-10">#</th>
+                        <th className="p-2 w-1/4">商品名称</th>
+                        <th className="p-2">分类</th>
+                        <th className="p-2">位置</th>
+                        <th className="p-2 w-20">数量</th>
+                        <th className="p-2 w-20">单位</th>
+                        <th className="p-2 w-20">单价</th>
+                        <th className="p-2 w-20">预警</th>
+                        <th className="p-2 w-10 text-center">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                      {previewData.map((item, idx) => {
+                        // Check if item already exists in system to show visual indicator
+                        const exists = items.some(i => i.name === item.name);
+                        
+                        return (
+                          <tr key={idx} className={`hover:bg-slate-50 dark:hover:bg-slate-700/50 ${exists ? 'bg-blue-50/30 dark:bg-blue-900/10' : ''}`}>
+                            <td className="p-2 text-slate-400">{idx + 1}</td>
+                            <td className="p-2">
+                              <input 
+                                type="text" 
+                                className={tableInputClass} 
+                                value={item.name} 
+                                onChange={(e) => handleUpdatePreviewItem(idx, 'name', e.target.value)} 
+                              />
+                              {exists && <span className="text-[10px] text-blue-500 block mt-0.5">已存在(将累加库存)</span>}
+                            </td>
+                            <td className="p-2">
+                              {exists ? (
+                                <span className="text-slate-500 dark:text-slate-400 italic" title="使用系统现有分类">
+                                  {items.find(i => i.name === item.name)?.category} (锁定)
+                                </span>
+                              ) : (
+                                <input 
+                                  type="text" 
+                                  className={tableInputClass} 
+                                  value={item.category} 
+                                  onChange={(e) => handleUpdatePreviewItem(idx, 'category', e.target.value)} 
+                                />
+                              )}
+                            </td>
+                            <td className="p-2">
+                              {exists ? (
+                                <span className="text-slate-500 dark:text-slate-400 italic" title="使用系统现有位置">
+                                  {items.find(i => i.name === item.name)?.location} (锁定)
+                                </span>
+                              ) : (
+                                <input 
+                                  type="text" 
+                                  className={tableInputClass} 
+                                  value={item.location} 
+                                  onChange={(e) => handleUpdatePreviewItem(idx, 'location', e.target.value)} 
+                                />
+                              )}
+                            </td>
+                            <td className="p-2">
+                              <input 
+                                type="number" 
+                                className={tableInputClass} 
+                                value={item.quantity} 
+                                onChange={(e) => handleUpdatePreviewItem(idx, 'quantity', Number(e.target.value))} 
+                              />
+                            </td>
+                            <td className="p-2">
+                              <input 
+                                type="text" 
+                                className={tableInputClass} 
+                                value={item.unit} 
+                                onChange={(e) => handleUpdatePreviewItem(idx, 'unit', e.target.value)} 
+                              />
+                            </td>
+                            <td className="p-2">
+                              <input 
+                                type="number" 
+                                className={tableInputClass} 
+                                value={item.price} 
+                                onChange={(e) => handleUpdatePreviewItem(idx, 'price', Number(e.target.value))} 
+                              />
+                            </td>
+                            <td className="p-2">
+                              <input 
+                                type="number" 
+                                className={tableInputClass} 
+                                value={item.minStockLevel} 
+                                onChange={(e) => handleUpdatePreviewItem(idx, 'minStockLevel', Number(e.target.value))} 
+                              />
+                            </td>
+                            <td className="p-2 text-center">
+                              <button 
+                                onClick={() => handleRemovePreviewRow(idx)}
+                                className="text-slate-400 hover:text-red-500 transition-colors"
+                                title="删除此行"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Reset Data */}
@@ -288,38 +603,6 @@ const Settings: React.FC<SettingsProps> = ({
                 <RotateCcw size={16} />
                 库存归零
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Custom Confirmation Modal */}
-      {showConfirmModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-fade-in-up border border-slate-100 dark:border-slate-700">
-            <div className="p-6">
-              <div className="w-12 h-12 bg-yellow-100 dark:bg-yellow-900/30 rounded-full flex items-center justify-center text-yellow-600 dark:text-yellow-400 mb-4 mx-auto">
-                <Code size={24} />
-              </div>
-              <h3 className="text-lg font-bold text-slate-800 dark:text-white text-center mb-2">确认执行 SQL 导入？</h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400 text-center mb-6">
-                您即将直接向数据库写入数据。请确保这段 SQL 代码是由 AI 生成并检查过的。
-              </p>
-              
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setShowConfirmModal(false)}
-                  className="flex-1 px-4 py-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg font-medium transition-colors"
-                >
-                  取消
-                </button>
-                <button 
-                  onClick={confirmExecuteSql}
-                  className="flex-1 px-4 py-2 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700 shadow-sm transition-colors"
-                >
-                  确认执行
-                </button>
-              </div>
             </div>
           </div>
         </div>
